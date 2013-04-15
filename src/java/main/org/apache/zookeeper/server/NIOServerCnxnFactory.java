@@ -826,6 +826,9 @@ public class NIOServerCnxnFactory extends ServerCnxnFactory {
 
     protected NIOServerCnxn createConnection(SocketChannel sock,
             SelectionKey sk, SelectorThread selectorThread) throws IOException {
+		// The connection can still process four-letter words.
+		if (zkServer == null)
+			LOG.warn("ZooKeeper server not running; connection will be useless.", new Exception());
         return new NIOServerCnxn(zkServer, sock, sk, this, selectorThread);
     }
 

@@ -45,10 +45,6 @@ public class ClientCnxnSocketNIO extends ClientCnxnSocket {
 
     private SelectionKey sockKey;
 
-    private SocketAddress localSocketAddress;
-
-    private SocketAddress remoteSocketAddress;
-
     ClientCnxnSocketNIO() throws IOException {
         super();
     }
@@ -270,8 +266,12 @@ public class ClientCnxnSocketNIO extends ClientCnxnSocket {
         sockKey = sock.register(selector, SelectionKey.OP_CONNECT);
         boolean immediateConnect = sock.connect(addr);
         if (immediateConnect) {
+			LOG.info("Connect was immediate.");
+			updateLastSendAndHeard();
             sendThread.primeConnection();
-        }
+        } else {
+			LOG.info("Connect was not immediate.");
+		}
     }
     
     @Override
@@ -293,6 +293,14 @@ public class ClientCnxnSocketNIO extends ClientCnxnSocket {
         incomingBuffer = lenBuffer;
     }
 
+	private Socket getSocket() {
+		SelectionKey s = sockKey;
+		if (s == null)
+			return null;
+		SocketChannel channel = (SocketChannel)s.channel();
+        return channel.socket();
+	}
+
     /**
      * Returns the address to which the socket is connected.
      * 
@@ -301,7 +309,10 @@ public class ClientCnxnSocketNIO extends ClientCnxnSocket {
      */
     @Override
     SocketAddress getRemoteSocketAddress() {
-        return remoteSocketAddress;
+        Socket socket = getSocket();
+		if (socket == null)
+			return null;
+        return socket.getRemoteSocketAddress();
     }
 
     /**
@@ -312,13 +323,10 @@ public class ClientCnxnSocketNIO extends ClientCnxnSocket {
      */
     @Override
     SocketAddress getLocalSocketAddress() {
-        return localSocketAddress;
-    }
-    
-    private void updateSocketAddresses() {
-        Socket socket = ((SocketChannel) sockKey.channel()).socket();
-        localSocketAddress = socket.getLocalSocketAddress();
-        remoteSocketAddress = socket.getRemoteSocketAddress();
+        Socket socket = getSocket();
+		if (socket == null)
+			return null;
+        return socket.getLocalSocketAddress();
     }
 
     @Override
@@ -344,7 +352,6 @@ public class ClientCnxnSocketNIO extends ClientCnxnSocket {
             if ((k.readyOps() & SelectionKey.OP_CONNECT) != 0) {
                 if (sc.finishConnect()) {
                     updateLastSendAndHeard();
-                    updateSocketAddresses();
                     sendThread.primeConnection();
                 }
             } else if ((k.readyOps() & (SelectionKey.OP_READ | SelectionKey.OP_WRITE)) != 0) {
@@ -366,7 +373,12 @@ public class ClientCnxnSocketNIO extends ClientCnxnSocket {
     @Override
     void testableCloseSocket() throws IOException {
         LOG.info("testableCloseSocket() called");
-        ((SocketChannel) sockKey.channel()).socket().close();
+        // sockKey may be concurrently accessed by multiple
+        // threads. We use tmp here to avoid a race condition
+        SelectionKey tmp = sockKey;
+        if (tmp!=null) {
+           ((SocketChannel) tmp.channel()).socket().close();
+        }
     }
 
     @Override

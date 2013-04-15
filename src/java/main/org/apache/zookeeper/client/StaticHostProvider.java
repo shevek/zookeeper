@@ -148,7 +148,7 @@ public final class StaticHostProvider implements HostProvider {
 
 
     @Override
-    public boolean updateServerList(Collection<InetSocketAddress> serverAddresses, InetSocketAddress currentHost) throws UnknownHostException {        
+    public synchronized boolean updateServerList(Collection<InetSocketAddress> serverAddresses, InetSocketAddress currentHost) throws UnknownHostException {        
         // Resolve server addresses and shuffle them
         List<InetSocketAddress> resolvedList = resolveAndShuffle(serverAddresses);
         if (resolvedList.isEmpty()) {
@@ -157,17 +157,37 @@ public final class StaticHostProvider implements HostProvider {
         }
         // Check if client's current server is in the new list of servers
         boolean myServerInNewConfig = false;
+        
+        InetSocketAddress myServer = currentHost;
+        
+  		// choose "current" server according to the client rebalancing algorithm
+        if (reconfigMode) {
+        	myServer = next(0);
+        }
+        
+        // if the client is not currently connected to any server
+        if (myServer == null) {
+        	// reconfigMode = false (next shouldn't return null).       	
+       		if (lastIndex >=0) {
+            	// take the last server to which we were connected
+       			myServer = this.serverAddresses.get(lastIndex);
+       		}
+       		else {
+       			// take the first server on the list
+       			myServer = this.serverAddresses.get(0);
+       		}
+        }
+        
         for (InetSocketAddress addr : resolvedList) {
-            if (addr.getPort() == currentHost.getPort() &&
-                    ((addr.getAddress()!=null && currentHost.getAddress()!=null &&
-                      addr.getAddress().equals(currentHost.getAddress()))
-                     || addr.getHostName().equals(currentHost.getHostName()))) {
+            if (addr.getPort() == myServer.getPort() &&
+                    ((addr.getAddress()!=null && myServer.getAddress()!=null &&
+                      addr.getAddress().equals(myServer.getAddress()))
+                     || addr.getHostName().equals(myServer.getHostName()))) {
                    myServerInNewConfig = true;
                    break;
                }
         }
 
-        synchronized(this) {
             reconfigMode = true;
 
             newServers.clear();
@@ -218,13 +238,25 @@ public final class StaticHostProvider implements HostProvider {
                 }
             }
 
+            if (!reconfigMode) {
+                currentIndex = resolvedList.indexOf(getServerAtCurrentIndex());
+            } else {
+            	currentIndex = -1;
+            }
             this.serverAddresses = resolvedList;    
             currentIndexOld = -1;
             currentIndexNew = -1; 
-            currentIndex = -1;
-            lastIndex = -1;                
+            lastIndex = currentIndex;              
             return reconfigMode;
-        }
+    }
+
+    public synchronized InetSocketAddress getServerAtIndex(int i) {
+    	if (i < 0 || i >= serverAddresses.size()) return null;
+    	return serverAddresses.get(i);
+    }
+    
+    public synchronized InetSocketAddress getServerAtCurrentIndex() {
+    	return getServerAtIndex(currentIndex);
     }
 
     public synchronized int size() {
@@ -274,7 +306,10 @@ public final class StaticHostProvider implements HostProvider {
         synchronized(this) {
             if (reconfigMode) {
                 addr = nextHostInReconfigMode();
-                if (addr != null) return addr;                
+                if (addr != null) {
+                	currentIndex = serverAddresses.indexOf(addr);
+                	return addr;                
+                }
                 //tried all servers and couldn't connect
                 reconfigMode = false;
                 needToSleep = (spinDelay > 0);
